@@ -25,12 +25,20 @@ import (
 	"time"
 )
 
+const (
+	privHeader string = `PRIV KEY`
+	pubHeader  string = `PUB KEY`
+)
+
 var (
-	host     = flag.String("host", "", "Comma-separated hostnames and IPs to generate a certificate for")
-	validFor = flag.Duration("duration", 365*24*time.Hour, "Duration that certificate is valid for")
-	keyFile  = flag.String("key-file", "key.pem", "Key File pem path")
-	certFile = flag.String("cert-file", "cert.pem", "Certificate File pem path")
-	verbose  = flag.Bool("verbose", false, "Verbose output")
+	host      = flag.String("host", "", "Comma-separated hostnames and IPs to generate a certificate for")
+	validFor  = flag.Duration("duration", 365*24*time.Hour, "Duration that certificate is valid for")
+	keyFile   = flag.String("key-file", "key.pem", "Key File pem path")
+	certFile  = flag.String("cert-file", "cert.pem", "Certificate File pem path")
+	doCutKeys = flag.Bool("signing-keys", false, "Generate signing keys instead of SSL certs")
+	privFile  = flag.String("priv-file", "private.pem", "Private key path")
+	pubFile   = flag.String("pub-file", "public.pem", "Public key path")
+	verbose   = flag.Bool("verbose", false, "Verbose output")
 )
 
 func publicKey(priv interface{}) interface{} {
@@ -62,13 +70,68 @@ func pemBlockForKey(priv interface{}) *pem.Block {
 func main() {
 	flag.Parse()
 
-	if len(*host) == 0 {
+	if len(*host) == 0 && !*doCutKeys {
 		log.Fatalf("Missing required --host parameter")
 	}
+
 	if !*verbose {
 		log.SetOutput(ioutil.Discard)
 	}
 
+	if *doCutKeys {
+		cutKeys()
+	} else {
+		cutCerts()
+	}
+}
+
+func cutKeys() {
+	//generate a big fucking RSA private public key pair
+	privateRsaKey, err := rsa.GenerateKey(rand.Reader, 8192)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	//generate the PEM file
+	privPemKey := &pem.Block{
+		Type:  privHeader,
+		Bytes: x509.MarshalPKCS1PrivateKey(privateRsaKey),
+	}
+
+	pubBytes, err := x509.MarshalPKIXPublicKey(privateRsaKey.Public())
+	if err != nil {
+		log.Fatal(err)
+	}
+	pubPemKey := &pem.Block{
+		Type:  pubHeader,
+		Bytes: pubBytes,
+	}
+
+	fout, err := os.Create(*privFile)
+	if err != nil {
+		log.Fatalf("Failed to open \"%s\": %v\n", *privFile, err)
+	}
+	if err := pem.Encode(fout, privPemKey); err != nil {
+		fout.Close()
+		log.Fatalf("Failed to write private PEM block: %v\n", err)
+	}
+	if err := fout.Close(); err != nil {
+		log.Fatalf("Failed to close file handle: %v\n", err)
+	}
+
+	fout, err = os.Create(*pubFile)
+	if err != nil {
+		log.Fatalf("Failed to open public key file \"%s\": %v\n", *pubFile, err)
+	}
+	if err := pem.Encode(fout, pubPemKey); err != nil {
+		log.Fatalf("Failed to write public key file: %v\n", err)
+	}
+	if err := fout.Close(); err != nil {
+		log.Fatalf("Failed to close public key file handle: %v\n", err)
+	}
+}
+
+func cutCerts() {
 	priv, err := rsa.GenerateKey(rand.Reader, 4096)
 	if err != nil {
 		log.Fatalf("failed to generate private key: %s", err)
